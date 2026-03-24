@@ -88,7 +88,7 @@ def load(pointer, mask=None, other=0, eviction_policy="", cache_modifier="", vol
         raise TypeError(f"load: unsupported pointer type {type(pointer)}")
 
 
-def store(pointer, value, mask=None, eviction_policy=""):
+def store(pointer, value, mask=None, eviction_policy="", cache_modifier=""):
     """Store values to memory via pointer(s)."""
     if isinstance(pointer, PointerBlock):
         offsets = pointer.offsets
@@ -138,6 +138,13 @@ def full(shape, value, dtype=float32):
     if isinstance(shape, (list, tuple)):
         return torch.full(shape, value, dtype=dtype)
     return torch.full((shape,), value, dtype=dtype)
+
+
+def trans(input):
+    """Transpose a 2D tensor."""
+    if input.ndim == 2:
+        return input.T
+    return input.transpose(-2, -1)
 
 
 def where(condition, x, y):
@@ -202,10 +209,18 @@ def multiple_of(input, value):
 
 
 def maximum(a, b):
+    if not isinstance(a, torch.Tensor):
+        a = torch.tensor(a)
+    if not isinstance(b, torch.Tensor):
+        b = torch.tensor(b)
     return torch.maximum(a, b)
 
 
 def minimum(a, b):
+    if not isinstance(a, torch.Tensor):
+        a = torch.tensor(a)
+    if not isinstance(b, torch.Tensor):
+        b = torch.tensor(b)
     return torch.minimum(a, b)
 
 
