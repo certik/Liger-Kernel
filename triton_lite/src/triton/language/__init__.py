@@ -82,8 +82,8 @@ def load(pointer, mask=None, other=0, eviction_policy="", cache_modifier="", vol
                 result = result.reshape(orig_shape)
             return result
     elif isinstance(pointer, TensorPointer):
-        # Scalar load
-        return pointer.data[pointer.offset]
+        # Scalar load — clone so later stores don't mutate already-loaded values
+        return pointer.data[pointer.offset].clone()
     else:
         raise TypeError(f"load: unsupported pointer type {type(pointer)}")
 
