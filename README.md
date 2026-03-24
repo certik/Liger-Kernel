@@ -1,13 +1,46 @@
 <a name="readme-top"></a>
 
-# How to Test
+# Development Setup
 
-```
-uv venv --python 3.12
+Two virtual environments let you run tests with either real PyTorch or the
+lightweight numpy-backed shims (`pytorch_lite` + `triton_lite`).
+
+### Real PyTorch (GPU / full fidelity)
+
+```bash
+uv venv .venv --python 3.12
 uv pip install -e ./triton_lite
 uv pip install -e ".[dev]"
-.venv/bin/python -m pytest test/transformers/test_geglu.py -v
+
+time .venv/bin/python -m pytest test/transformers/test_geglu.py -v
 ```
+Prints `6 passed, 2 skipped in 12.07s` and `real 13.757s`.
+Just the import speed:
+```
+$ time .venv/bin/python -c "import torch"
+.venv/bin/python -c "import torch"  0.60s user 0.08s system 99% cpu 0.683 total
+```
+
+### Lite shims (macOS / CPU / fast iteration)
+
+```bash
+uv venv .venv-lite --python 3.12
+uv pip install -p .venv-lite -e ./triton_lite -e ./pytorch_lite
+uv pip install -p .venv-lite -e ".[dev]"
+uv pip uninstall -p .venv-lite torch transformers tokenizers torchvision
+
+time .venv-lite/bin/python -m pytest test/transformers/test_geglu.py -v
+```
+Prints `6 passed, 2 skipped in 5.87s` and `real 6.346s`.
+Just the import speed:
+```
+$ time .venv-lite/bin/python -c "import torch"
+.venv-lite/bin/python -c "import torch"  0.05s user 0.01s system 97% cpu 0.055 total
+```
+
+Both use `triton_lite` (a pure-Python Triton interpreter).  The lite venv
+additionally replaces `torch`, `transformers`, and `tokenizers` with
+numpy-backed stubs from `pytorch_lite`.
 
 # Liger Kernel: Efficient Triton Kernels for LLM Training
 
