@@ -13,9 +13,26 @@ import torch
 _ctx = threading.local()
 
 
+def _tensor_to_flat_storage(tensor):
+    """Convert a tensor to a 1-D view of its underlying storage.
+
+    For non-contiguous tensors (e.g. channels_last), reshape(-1) creates
+    a contiguous copy which breaks stride-based indexing in kernels.
+    This function returns the raw storage as a flat tensor instead.
+    """
+    t = tensor.detach()
+    nbytes = t.untyped_storage().size()
+    storage_numel = nbytes // t.element_size()
+    flat = t.as_strided((storage_numel,), (1,), storage_offset=0)
+    return flat, t.storage_offset()
+
+
 class _PointerDtype:
     """Wraps a torch dtype to provide Triton's .element_ty attribute."""
     def __init__(self, torch_dtype):
+        # Unwrap _DtypeWithBitwidth if present
+        if hasattr(torch_dtype, '_dtype'):
+            torch_dtype = torch_dtype._dtype
         self._dtype = torch_dtype
         self.element_ty = torch_dtype  # In Triton, element_ty is the scalar type
 
@@ -45,33 +62,56 @@ class TensorPointer:
         self.data = data
         self.offset = offset  # scalar base offset
         self.dtype = _PointerDtype(data.dtype)  # expose dtype with .element_ty
+        self.type = self.dtype  # alias: some kernels use ptr.type.element_ty
+
+    def _resolve_other(self, other):
+        """Convert other to an integer offset value."""
+        if isinstance(other, torch.Tensor):
+            if other.ndim == 0:
+                return int(other.item())
+            return other  # multi-element tensor
+        return int(other)
 
     def __add__(self, other):
         if isinstance(other, TensorPointer):
             return TensorPointer(self.data, self.offset + other.offset)
-        if isinstance(other, torch.Tensor):
-            if other.ndim == 0:
-                # Scalar tensor → offset the pointer
-                return TensorPointer(self.data, self.offset + int(other.item()))
-            # 1-D offset tensor → PointerBlock (array of pointers)
-            return PointerBlock(self.data, self.offset + other)
-        # Plain scalar
-        return TensorPointer(self.data, self.offset + int(other))
+        resolved = self._resolve_other(other)
+        if isinstance(resolved, torch.Tensor):
+            return PointerBlock(self.data, self.offset + resolved)
+        return TensorPointer(self.data, self.offset + resolved)
 
     def __radd__(self, other):
         return self.__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, torch.Tensor):
+            if other.ndim == 0:
+                return TensorPointer(self.data, self.offset - int(other.item()))
+            return PointerBlock(self.data, self.offset - other)
+        return TensorPointer(self.data, self.offset - int(other))
+
+    def __rsub__(self, other):
+        raise TypeError("Cannot subtract a pointer from a scalar")
 
     def __iadd__(self, other):
         if isinstance(other, torch.Tensor):
             if other.ndim == 0:
                 self.offset += int(other.item())
             else:
-                # 1-D offset tensor: can't iadd, should use __add__ instead
-                raise TypeError(
-                    "Cannot iadd a multi-element tensor to a pointer; use ptr + tensor"
-                )
+                # Mutate into a PointerBlock — return new object
+                return PointerBlock(self.data, self.offset + other)
         else:
             self.offset += int(other)
+        return self
+
+    def __isub__(self, other):
+        if isinstance(other, torch.Tensor):
+            if other.ndim == 0:
+                self.offset -= int(other.item())
+            else:
+                return PointerBlock(self.data, self.offset - other)
+        else:
+            self.offset -= int(other)
         return self
 
 
@@ -95,11 +135,22 @@ class PointerBlock:
     def __radd__(self, other):
         return self.__add__(other)
 
+    def __sub__(self, other):
+        if isinstance(other, (int, float)):
+            return PointerBlock(self.data, self.offsets - int(other))
+        if isinstance(other, torch.Tensor):
+            return PointerBlock(self.data, self.offsets - other)
+        return NotImplemented
+
     def __mul__(self, other):
-        # Needed for things like pointer_block * 2 (offset scaling)
         if isinstance(other, (int, float)):
             return PointerBlock(self.data, self.offsets * int(other))
+        if isinstance(other, torch.Tensor):
+            return PointerBlock(self.data, self.offsets * other)
         return NotImplemented
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
 
 
 class JITFunction:
@@ -110,12 +161,19 @@ class JITFunction:
     1. Convert torch.Tensor arguments to TensorPointer
     2. Loop over the grid, setting the program_id for each iteration
     3. Execute the kernel body as regular Python
+
+    Also supports direct calls (without grid) for helper JIT functions
+    that are called from within other kernels.
     """
 
     def __init__(self, fn):
         self.fn = fn
         self.__name__ = fn.__name__
         self.__doc__ = fn.__doc__
+
+    def __call__(self, *args, **kwargs):
+        """Direct call for JIT helper functions invoked from within kernels."""
+        return self.fn(*args, **kwargs)
 
     def __getitem__(self, grid):
         """kernel[(grid,)] → returns a launcher callable."""
@@ -133,6 +191,7 @@ class _KernelLauncher:
 
     def __call__(self, *args, **kwargs):
         import inspect
+        from triton.language import constexpr
 
         # Separate kernel kwargs (constexpr params) from launch kwargs
         launch_keys = {"num_warps", "num_stages", "num_ctas", "enable_warp_specialization", "grf_mode"}
@@ -140,15 +199,27 @@ class _KernelLauncher:
         # Check which launch keys are actually kernel parameters
         sig = inspect.signature(self.fn)
         param_names = set(sig.parameters.keys())
+        params_list = list(sig.parameters.values())
         # If a launch key is also a kernel parameter, keep it as a kernel kwarg
         actual_launch_keys = launch_keys - param_names
         kernel_kwargs = {k: v for k, v in kwargs.items() if k not in actual_launch_keys}
 
+        def _is_constexpr_param(param):
+            """Check if a parameter has tl.constexpr annotation."""
+            ann = param.annotation
+            if ann is inspect.Parameter.empty:
+                return False
+            return ann is constexpr or (isinstance(ann, type) and ann.__name__ == 'constexpr')
+
         # Build final args list, converting tensors to pointers
+        # and non-constexpr scalar floats to fp32 tensors (for type promotion)
         converted_args = []
         for i, arg in enumerate(args):
             if isinstance(arg, torch.Tensor):
-                converted_args.append(TensorPointer(arg.detach().reshape(-1), offset=0))
+                flat, storage_off = _tensor_to_flat_storage(arg)
+                converted_args.append(TensorPointer(flat, offset=storage_off))
+            elif isinstance(arg, float) and i < len(params_list) and not _is_constexpr_param(params_list[i]):
+                converted_args.append(torch.tensor(arg, dtype=torch.float32))
             else:
                 converted_args.append(arg)
 
@@ -156,7 +227,10 @@ class _KernelLauncher:
         converted_kwargs = {}
         for k, v in kernel_kwargs.items():
             if isinstance(v, torch.Tensor):
-                converted_kwargs[k] = TensorPointer(v.detach().reshape(-1), offset=0)
+                flat, storage_off = _tensor_to_flat_storage(v)
+                converted_kwargs[k] = TensorPointer(flat, offset=storage_off)
+            elif isinstance(v, float) and k in sig.parameters and not _is_constexpr_param(sig.parameters[k]):
+                converted_kwargs[k] = torch.tensor(v, dtype=torch.float32)
             else:
                 converted_kwargs[k] = v
 
@@ -181,10 +255,13 @@ class _KernelLauncher:
                 resolved_grid.append(g)
         grid = tuple(resolved_grid)
 
-        # Compute total grid size
+        # Compute total grid size and store grid dimensions
         total = 1
         for g in grid:
             total *= g
+        # Pad grid to 3D for num_programs
+        padded_grid = list(grid) + [1] * (3 - len(grid))
+        _ctx.grid_dims = tuple(padded_grid[:3])
 
         # Iterate over grid
         for pid in range(total):
@@ -222,3 +299,9 @@ class _KernelLauncher:
 def get_program_id(axis):
     """Called by tl.program_id(axis)."""
     return _ctx.program_ids[axis]
+
+
+def get_num_programs(axis):
+    """Called by tl.num_programs(axis). Returns grid size for given axis."""
+    # _ctx.grid_dims is set by _KernelLauncher before the loop
+    return getattr(_ctx, 'grid_dims', (1, 1, 1))[axis]

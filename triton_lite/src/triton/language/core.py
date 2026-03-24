@@ -10,6 +10,7 @@ from triton.language import (
     # dtypes
     float16,
     float32,
+    float64,
     bfloat16,
     int8,
     int16,
@@ -20,29 +21,22 @@ from triton.language import (
     uint32,
     uint64,
     bool_ as bool,
+    float8e5,
+    int1,
     # constexpr
     constexpr,
     # operations
     arange,
     where,
     static_range,
+    reshape,
+    broadcast_to,
+    reduce,
+    associative_scan,
+    static_assert,
 )
 
 import torch
-
-
-def reshape(tensor, shape):
-    """Reshape a tensor to a given shape."""
-    if isinstance(shape, (list, tuple)):
-        return tensor.reshape(*shape)
-    return tensor.reshape(shape)
-
-
-def broadcast_to(tensor, shape):
-    """Broadcast a tensor to a given shape."""
-    if isinstance(shape, (list, tuple)):
-        return tensor.broadcast_to(*shape)
-    return tensor.broadcast_to(shape)
 
 
 def static_assert(condition, msg=""):
