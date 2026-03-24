@@ -129,6 +129,8 @@ def store(pointer, value, mask=None, eviction_policy="", cache_modifier=""):
 def zeros(shape, dtype=float32):
     """Create a tensor of zeros."""
     if isinstance(shape, (list, tuple)):
+        if len(shape) == 0:
+            return torch.zeros(1, dtype=dtype).squeeze()
         return torch.zeros(*shape, dtype=dtype)
     return torch.zeros(shape, dtype=dtype)
 
@@ -157,6 +159,21 @@ def sum(input, axis=None):
     if axis is not None:
         return torch.sum(input, dim=axis)
     return torch.sum(input)
+
+
+def cumsum(input, axis=0):
+    """Cumulative sum along an axis."""
+    return torch.cumsum(input, dim=axis)
+
+
+def cast(input, dtype):
+    """Cast a tensor to a different dtype."""
+    from triton._interpreter import _PointerDtype
+    if isinstance(dtype, _PointerDtype):
+        dtype = dtype.element_ty
+    if isinstance(input, torch.Tensor):
+        return input.to(dtype)
+    return torch.tensor(input, dtype=dtype)
 
 
 def max(input, axis=None):
@@ -258,8 +275,13 @@ def cdiv(a, b):
 def static_range(start, end=None, step=1):
     """Equivalent to range() — in real Triton this unrolls at compile time."""
     if end is None:
-        return range(start)
-    return range(start, end, step)
+        return builtins.range(start)
+    return builtins.range(start, end, step)
+
+
+# tl.range is the same as static_range in newer Triton versions
+import builtins
+range = static_range
 
 
 def split(tensor):

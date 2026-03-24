@@ -13,6 +13,24 @@ import torch
 _ctx = threading.local()
 
 
+class _PointerDtype:
+    """Wraps a torch dtype to provide Triton's .element_ty attribute."""
+    def __init__(self, torch_dtype):
+        self._dtype = torch_dtype
+        self.element_ty = torch_dtype  # In Triton, element_ty is the scalar type
+
+    def __eq__(self, other):
+        if isinstance(other, _PointerDtype):
+            return self._dtype == other._dtype
+        return self._dtype == other
+
+    def __hash__(self):
+        return hash(self._dtype)
+
+    def __repr__(self):
+        return repr(self._dtype)
+
+
 class TensorPointer:
     """
     Simulates a Triton pointer into a flattened torch tensor.
@@ -26,6 +44,7 @@ class TensorPointer:
         # data: 1-D torch tensor (the flattened view of the original tensor)
         self.data = data
         self.offset = offset  # scalar base offset
+        self.dtype = _PointerDtype(data.dtype)  # expose dtype with .element_ty
 
     def __add__(self, other):
         if isinstance(other, TensorPointer):
@@ -117,11 +136,13 @@ class _KernelLauncher:
 
         # Separate kernel kwargs (constexpr params) from launch kwargs
         launch_keys = {"num_warps", "num_stages", "num_ctas", "enable_warp_specialization", "grf_mode"}
-        kernel_kwargs = {k: v for k, v in kwargs.items() if k not in launch_keys}
 
-        # Get function parameter names
+        # Check which launch keys are actually kernel parameters
         sig = inspect.signature(self.fn)
-        param_names = list(sig.parameters.keys())
+        param_names = set(sig.parameters.keys())
+        # If a launch key is also a kernel parameter, keep it as a kernel kwarg
+        actual_launch_keys = launch_keys - param_names
+        kernel_kwargs = {k: v for k, v in kwargs.items() if k not in actual_launch_keys}
 
         # Build final args list, converting tensors to pointers
         converted_args = []
