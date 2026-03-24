@@ -288,6 +288,14 @@ def where(condition, x, y):
     return _wrap(np.where(cd, xd, yd))
 
 
+def addcdiv(input, tensor1, tensor2, *, value=1):
+    inp = input._data.astype(np.float64)
+    t1 = tensor1._data.astype(np.float64)
+    t2 = tensor2._data.astype(np.float64)
+    result = inp + value * (t1 / t2)
+    return _wrap(result.astype(input._data.dtype), input._logical_dtype)
+
+
 def erf(input):
     from scipy.special import erf as _erf
     return _wrap(_erf(input._data), input._logical_dtype)
