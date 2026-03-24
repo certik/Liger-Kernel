@@ -12,6 +12,10 @@ class _ActiveDriver:
     def __init__(self):
         self.utils = _DriverUtils()
 
+    def get_active_torch_device(self):
+        import torch
+        return torch.device("cpu")
+
 
 class _Driver:
     def __init__(self):
