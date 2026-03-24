@@ -231,11 +231,36 @@ class LayerNorm(Module):
         x = input._data.astype(np.float64)
         mean = x.mean(axis=-1, keepdims=True)
         var = x.var(axis=-1, keepdims=True)
-        out = (x - mean) / np.sqrt(var + self.eps)
-        out = out.astype(input._data.dtype)
+        xhat = (x - mean) / np.sqrt(var + self.eps)
+        out = xhat.astype(input._data.dtype)
         if hasattr(self, "weight"):
             out = out * self.weight._data + self.bias._data
-        return _wrap(out, input._logical_dtype)
+        result = _wrap(out, input._logical_dtype)
+        if input._requires_grad:
+            result._requires_grad = True
+            ns = self.normalized_shape
+            n = 1
+            for s in ns:
+                n *= s
+            xhat_f = xhat.astype(input._data.dtype)
+            std_inv = (1.0 / np.sqrt(var + self.eps)).astype(input._data.dtype)
+            w = self.weight._data.copy() if hasattr(self, "weight") else None
+
+            def bw(g):
+                gd = g._data.astype(np.float64)
+                if w is not None:
+                    gd = gd * w.astype(np.float64)
+                dxhat = gd
+                dmean = -np.sum(dxhat, axis=-1, keepdims=True) * std_inv.astype(np.float64)
+                dvar = np.sum(dxhat * (x - mean), axis=-1, keepdims=True) * (-0.5) * (var + self.eps) ** (-1.5)
+                dx = dxhat * std_inv.astype(np.float64) + (2.0 * (x - mean) * dvar + dmean) / n
+                return (_wrap(dx.astype(input._data.dtype), input._logical_dtype),)
+
+            inputs = [input]
+            if hasattr(self, "weight"):
+                inputs.extend([self.weight, self.bias])
+            result._grad_fn = _GradFn("LayerNormBackward", bw, inputs)
+        return result
 
 
 class Embedding(Module):

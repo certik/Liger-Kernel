@@ -294,10 +294,58 @@ def erf(input):
 
 # ── Comparison / utility ────────────────────────────────────────────────────
 
+def softmax(input, dim=-1):
+    import torch.nn.functional as F
+    return F.softmax(input, dim=dim)
+
+
+def isnan(input):
+    return _wrap(np.isnan(input._data))
+
+
+def isinf(input):
+    return _wrap(np.isinf(input._data))
+
+
+def isposinf(input):
+    return _wrap(np.isposinf(input._data))
+
+
+def isneginf(input):
+    return _wrap(np.isneginf(input._data))
+
+
+def logical_xor(a, b):
+    ad = a._data if isinstance(a, Tensor) else np.asarray(a)
+    bd = b._data if isinstance(b, Tensor) else np.asarray(b)
+    return _wrap(np.logical_xor(ad, bd))
+
+
+def logical_or(a, b):
+    ad = a._data if isinstance(a, Tensor) else np.asarray(a)
+    bd = b._data if isinstance(b, Tensor) else np.asarray(b)
+    return _wrap(np.logical_or(ad, bd))
+
+
+def logical_and(a, b):
+    ad = a._data if isinstance(a, Tensor) else np.asarray(a)
+    bd = b._data if isinstance(b, Tensor) else np.asarray(b)
+    return _wrap(np.logical_and(ad, bd))
+
+
+def logical_not(a):
+    ad = a._data if isinstance(a, Tensor) else np.asarray(a)
+    return _wrap(np.logical_not(ad))
+
 def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
     ad = a._data if isinstance(a, Tensor) else np.asarray(a)
     bd = b._data if isinstance(b, Tensor) else np.asarray(b)
     return builtins.bool(np.allclose(ad, bd, rtol=rtol, atol=atol, equal_nan=equal_nan))
+
+
+def nonzero(input):
+    indices = np.argwhere(input._data)
+    return _wrap(indices.astype(np.int64))
 
 
 def equal(a, b):

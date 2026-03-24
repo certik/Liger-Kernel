@@ -78,8 +78,21 @@ def relu(input, inplace=False):
 def softmax(input, dim=-1, _stacklevel=3, dtype=None):
     x = input._data.astype(np.float64)
     e = np.exp(x - np.max(x, axis=dim, keepdims=True))
-    out = (e / np.sum(e, axis=dim, keepdims=True)).astype(input._data.dtype)
-    return _wrap(out, input._logical_dtype)
+    s = e / np.sum(e, axis=dim, keepdims=True)
+    out = s.astype(input._data.dtype)
+    result = _wrap(out, input._logical_dtype)
+    if input._requires_grad:
+        result._requires_grad = True
+        s_copy = s.copy().astype(input._data.dtype)
+
+        def bw(g):
+            gd = g._data
+            dot = np.sum(gd * s_copy, axis=dim, keepdims=True)
+            grad = (s_copy * (gd - dot)).astype(input._data.dtype)
+            return (_wrap(grad, input._logical_dtype),)
+
+        result._grad_fn = _GradFn("SoftmaxBackward", bw, [input])
+    return result
 
 
 def cross_entropy(input, target, **kwargs):

@@ -235,10 +235,55 @@ class Tensor:
         t._requires_grad = self._requires_grad
         return t
 
+    def copy_(self, src):
+        """In-place copy from another tensor."""
+        if isinstance(src, Tensor):
+            np.copyto(self._data, src._data)
+        else:
+            np.copyto(self._data, np.asarray(src))
+        return self
+
+    def masked_fill(self, mask, value):
+        """Return a new tensor with positions where *mask* is True replaced by *value*."""
+        md = mask._data if isinstance(mask, Tensor) else np.asarray(mask)
+        md = np.broadcast_to(md.astype(np.bool_), self._data.shape)
+        out = self._data.copy()
+        out[md] = value
+        result = _wrap(out, self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+            mask_copy = md.copy()
+
+            def bw(g):
+                gd = g._data.copy()
+                gd[mask_copy] = 0.0
+                return (_wrap(gd, self._logical_dtype),)
+
+            result._grad_fn = _GradFn("MaskedFillBackward", bw, [self])
+        return result
+
+    def masked_fill_(self, mask, value):
+        """In-place masked fill."""
+        md = mask._data if isinstance(mask, Tensor) else np.asarray(mask)
+        md = np.broadcast_to(md.astype(np.bool_), self._data.shape)
+        self._data[md] = value
+        return self
+
     def contiguous(self):
         if self._data.flags["C_CONTIGUOUS"]:
+            if self._requires_grad:
+                # Return self to preserve autograd chain
+                return self
             return self
-        return _wrap(np.ascontiguousarray(self._data), self._logical_dtype)
+        result = _wrap(np.ascontiguousarray(self._data), self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+
+            def bw(g):
+                return (g,)
+
+            result._grad_fn = _GradFn("ContiguousBackward", bw, [self])
+        return result
 
     def to(self, *args, **kwargs):
         target = None
@@ -281,12 +326,30 @@ class Tensor:
     def view(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
             shape = tuple(shape[0])
-        return _wrap(self._data.reshape(shape), self._logical_dtype)
+        result = _wrap(self._data.reshape(shape), self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+            orig_shape = self._data.shape
+
+            def bw(g):
+                return (_wrap(g._data.reshape(orig_shape), self._logical_dtype),)
+
+            result._grad_fn = _GradFn("ViewBackward", bw, [self])
+        return result
 
     def reshape(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
             shape = tuple(shape[0])
-        return _wrap(self._data.reshape(shape), self._logical_dtype)
+        result = _wrap(self._data.reshape(shape), self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+            orig_shape = self._data.shape
+
+            def bw(g):
+                return (_wrap(g._data.reshape(orig_shape), self._logical_dtype),)
+
+            result._grad_fn = _GradFn("ReshapeBackward", bw, [self])
+        return result
 
     def stride(self, dim=None):
         s = tuple(st // self._data.itemsize for st in self._data.strides)
@@ -309,7 +372,18 @@ class Tensor:
     def transpose(self, dim0, dim1):
         axes = list(range(self._data.ndim))
         axes[dim0], axes[dim1] = axes[dim1], axes[dim0]
-        return _wrap(np.transpose(self._data, axes), self._logical_dtype)
+        result = _wrap(np.transpose(self._data, axes), self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+            inv_axes = [0] * len(axes)
+            for i, a in enumerate(axes):
+                inv_axes[a] = i
+
+            def bw(g):
+                return (_wrap(np.transpose(g._data, inv_axes), self._logical_dtype),)
+
+            result._grad_fn = _GradFn("TransposeBackward", bw, [self])
+        return result
 
     def permute(self, *dims):
         return _wrap(np.transpose(self._data, dims), self._logical_dtype)
@@ -338,7 +412,19 @@ class Tensor:
         return _wrap(np.asarray(self._data.all()))
 
     def sum(self, dim=None, keepdim=False):
-        return _wrap(np.sum(self._data, axis=dim, keepdims=keepdim), self._logical_dtype)
+        result = _wrap(np.sum(self._data, axis=dim, keepdims=keepdim), self._logical_dtype)
+        if self._requires_grad:
+            result._requires_grad = True
+            orig_shape = self._data.shape
+
+            def bw(g):
+                gd = g._data
+                if dim is not None and not keepdim:
+                    gd = np.expand_dims(gd, axis=dim)
+                return (_wrap(np.broadcast_to(gd, orig_shape).copy(), self._logical_dtype),)
+
+            result._grad_fn = _GradFn("SumBackward", bw, [self])
+        return result
 
     def mean(self, dim=None, keepdim=False):
         return _wrap(np.mean(self._data, axis=dim, keepdims=keepdim).astype(self._data.dtype), self._logical_dtype)
@@ -450,6 +536,18 @@ class Tensor:
     def __rtruediv__(self, other):
         return _wrap(_get_data(other) / self._data, self._logical_dtype)
 
+    def __floordiv__(self, other):
+        return _wrap(self._data // _get_data(other), self._logical_dtype)
+
+    def __rfloordiv__(self, other):
+        return _wrap(_get_data(other) // self._data, self._logical_dtype)
+
+    def __mod__(self, other):
+        return _wrap(self._data % _get_data(other), self._logical_dtype)
+
+    def __rmod__(self, other):
+        return _wrap(_get_data(other) % self._data, self._logical_dtype)
+
     def __neg__(self):
         return _wrap(-self._data, self._logical_dtype)
 
@@ -497,6 +595,21 @@ class Tensor:
         if isinstance(other, dtype):
             return self.dtype != other
         return _wrap(self._data != _get_data(other))
+
+    def __and__(self, other):
+        return _wrap(self._data & _get_data(other))
+
+    def __rand__(self, other):
+        return _wrap(_get_data(other) & self._data)
+
+    def __or__(self, other):
+        return _wrap(self._data | _get_data(other))
+
+    def __ror__(self, other):
+        return _wrap(_get_data(other) | self._data)
+
+    def __invert__(self):
+        return _wrap(~self._data)
 
     # ── indexing ──
 
