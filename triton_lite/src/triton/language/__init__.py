@@ -294,10 +294,24 @@ def broadcast_to(tensor, shape):
 # ─── Reduction operations ───
 
 def sum(input, axis=None):
-    """Sum reduction."""
+    """Sum reduction.
+
+    Uses double-precision internally for float32 inputs to match the
+    accuracy of BLAS-based reductions (e.g. sgemv) that the reference
+    test code relies on.
+    """
+    if not isinstance(input, torch.Tensor):
+        input = torch.tensor(input)
+    use_f64 = input.dtype == torch.float32
+    if use_f64:
+        input = input.double()
     if axis is not None:
-        return torch.sum(input, dim=axis)
-    return torch.sum(input)
+        result = torch.sum(input, dim=axis)
+    else:
+        result = torch.sum(input)
+    if use_f64:
+        result = result.float()
+    return result
 
 
 def cumsum(input, axis=0):
