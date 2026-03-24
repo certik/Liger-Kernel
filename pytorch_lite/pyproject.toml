@@ -3,16 +3,16 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "transformers"
-version = "5.3.0"
-description = "PyTorch-lite: lightweight shims for HuggingFace transformers/tokenizers for macOS/CPU development"
+name = "pytorch-lite"
+version = "0.1.0"
+description = "PyTorch-lite: lightweight shims for torch, transformers, and tokenizers for macOS/CPU development"
 requires-python = ">=3.10"
-dependencies = ["torch"]
+dependencies = ["numpy"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["transformers*", "tokenizers*"]
+include = ["torch*", "transformers*", "tokenizers*"]
 namespaces = false
