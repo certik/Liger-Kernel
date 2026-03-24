@@ -211,8 +211,8 @@ def sigmoid(input):
 
 
 def dot(a, b, allow_tf32=True):
-    """Matrix dot product."""
-    return torch.matmul(a, b)
+    """Matrix dot product — accumulate in float32 to match real Triton."""
+    return torch.matmul(a.float(), b.float())
 
 
 def debug_barrier():
