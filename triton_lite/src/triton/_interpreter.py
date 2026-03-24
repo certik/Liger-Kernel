@@ -160,13 +160,30 @@ class _KernelLauncher:
             else:
                 converted_kwargs[k] = v
 
-        # Compute total grid size
-        import copy
-
-        total = 1
+        # Resolve callable grid elements (lambda grids).
+        # In real Triton, a grid can be a callable that receives a `meta` dict
+        # mapping parameter names to their values and returns a grid tuple.
+        resolved_grid = []
         for g in self.grid:
             if callable(g):
-                raise NotImplementedError("Lambda grids not yet supported in triton-lite")
+                # Build meta dict: map param names → original arg values
+                meta = {}
+                params = list(sig.parameters.keys())
+                for param_name, arg_val in zip(params, args):
+                    meta[param_name] = arg_val
+                meta.update(kernel_kwargs)
+                result = g(meta)
+                if isinstance(result, (tuple, list)):
+                    resolved_grid.extend(result)
+                else:
+                    resolved_grid.append(result)
+            else:
+                resolved_grid.append(g)
+        grid = tuple(resolved_grid)
+
+        # Compute total grid size
+        total = 1
+        for g in grid:
             total *= g
 
         # Iterate over grid
@@ -174,7 +191,7 @@ class _KernelLauncher:
             # Set program IDs (support up to 3D grid)
             grid_ids = []
             remaining = pid
-            for dim_size in reversed(self.grid):
+            for dim_size in reversed(grid):
                 grid_ids.append(remaining % dim_size)
                 remaining //= dim_size
             grid_ids.reverse()
