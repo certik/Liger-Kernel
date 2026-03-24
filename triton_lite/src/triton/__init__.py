@@ -155,6 +155,50 @@ for _fn_name in ('promote_types', 'result_type', 'can_cast', 'finfo', 'iinfo'):
         setattr(torch, _fn_name, _make_pos_wrapper(_orig))
 
 
+# ---------------------------------------------------------------------------
+# Patch torch.sub / torch.add to simulate GPU-like fused fp32 computation for
+# fp16/bf16 inputs.  On GPU, these ops widen fp16 to fp32, compute, then
+# round once back to fp16 ("fused").  On CPU, PyTorch applies per-op
+# rounding which differs by up to 1 ULP from the fused result.  Since
+# triton-lite promotes fp16→fp32 at load time (matching GPU register
+# behaviour), the kernel always produces the fused result; patching the
+# reference functions here ensures they agree.
+# ---------------------------------------------------------------------------
+_LOW_PREC = (torch.float16, torch.bfloat16)
+
+_original_torch_sub = torch.sub
+
+def _fused_sub(input, other, *, alpha=1, out=None):
+    if (isinstance(input, torch.Tensor) and input.dtype in _LOW_PREC
+            and not input.is_cuda):
+        other_f = other.float() if isinstance(other, torch.Tensor) else other
+        result = _original_torch_sub(input.float(), other_f, alpha=alpha)
+        result = result.to(input.dtype)
+        if out is not None:
+            out.copy_(result)
+            return out
+        return result
+    return _original_torch_sub(input, other, alpha=alpha, out=out)
+
+torch.sub = _fused_sub
+
+_original_torch_add = torch.add
+
+def _fused_add(input, other, *, alpha=1, out=None):
+    if (isinstance(input, torch.Tensor) and input.dtype in _LOW_PREC
+            and not input.is_cuda):
+        other_f = other.float() if isinstance(other, torch.Tensor) else other
+        result = _original_torch_add(input.float(), other_f, alpha=alpha)
+        result = result.to(input.dtype)
+        if out is not None:
+            out.copy_(result)
+            return out
+        return result
+    return _original_torch_add(input, other, alpha=alpha, out=out)
+
+torch.add = _fused_add
+
+
 def jit(fn=None, **kwargs):
     """Decorator that wraps a Triton kernel for CPU interpretation."""
     if fn is not None:

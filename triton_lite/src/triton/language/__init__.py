@@ -153,8 +153,13 @@ def arange(start, end):
 def load(pointer, mask=None, other=0, eviction_policy="", cache_modifier="", volatile=False):
     """Load values from memory via pointer(s).
 
-    Promotes fp16/bf16 results to fp32 to match Triton's computation
-    precision (Triton promotes scalar-block operations to fp32).
+    Promotes fp16/bf16 results to fp32 to match GPU ALU behaviour where
+    fp16 values are widened to fp32 in registers.  Individual per-op
+    rounding is NOT applied here — the caller's arithmetic (which stays
+    in fp32) plus a single round-to-fp16 at ``tl.store`` reproduces the
+    fused-precision path used by ``torch.deg2rad``, ``torch.addcmul``,
+    ``torch.softplus`` and other PyTorch reference functions that
+    internally promote to fp32.
     """
     other = _unwrap(other)
     if isinstance(pointer, PointerBlock):
