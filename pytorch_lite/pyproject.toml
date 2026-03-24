@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transformers"
+version = "5.3.0"
+description = "PyTorch-lite: lightweight shims for HuggingFace transformers/tokenizers for macOS/CPU development"
+requires-python = ">=3.10"
+dependencies = ["torch"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["transformers*", "tokenizers*"]
+namespaces = false
