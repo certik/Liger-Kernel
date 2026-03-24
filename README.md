@@ -1,5 +1,14 @@
 <a name="readme-top"></a>
 
+# How to Test
+
+```
+uv venv --python 3.12
+uv pip install -e ./triton_lite
+uv pip install -e ".[dev]"
+.venv/bin/python -m pytest test/transformers/test_geglu.py -v
+```
+
 # Liger Kernel: Efficient Triton Kernels for LLM Training
 
 
