@@ -38,6 +38,7 @@ import torch.cuda  # noqa: F401
 import torch.xpu  # noqa: F401
 import torch.distributed  # noqa: F401
 import torch._library  # noqa: F401
+import torch.testing  # noqa: F401
 
 # Also expose version info as a submodule-like namespace
 class version:
@@ -371,3 +372,52 @@ def device(d):
     return d
 
 Size = tuple
+
+
+# ── Memory format sentinels ─────────────────────────────────────────────────
+
+class _MemoryFormat:
+    def __init__(self, name):
+        self._name = name
+    def __repr__(self):
+        return f"torch.{self._name}"
+
+preserve_format = _MemoryFormat("preserve_format")
+contiguous_format = _MemoryFormat("contiguous_format")
+channels_last = _MemoryFormat("channels_last")
+channels_last_3d = _MemoryFormat("channels_last_3d")
+
+# ── Layout sentinels ───────────────────────────────────────────────────────
+
+class _Layout:
+    def __init__(self, name):
+        self._name = name
+    def __repr__(self):
+        return f"torch.{self._name}"
+
+strided = _Layout("strided")
+
+
+# ── finfo / iinfo ──────────────────────────────────────────────────────────
+
+class finfo:
+    """Minimal torch.finfo shim backed by numpy."""
+    def __init__(self, dtype_):
+        nd = _to_np(dtype_) or np.float32
+        info = np.finfo(nd)
+        self.bits = info.bits
+        self.eps = float(info.eps)
+        self.max = float(info.max)
+        self.min = float(info.min)
+        self.tiny = float(info.tiny)
+        self.dtype = dtype_
+
+class iinfo:
+    """Minimal torch.iinfo shim backed by numpy."""
+    def __init__(self, dtype_):
+        nd = _to_np(dtype_) or np.int32
+        info = np.iinfo(nd)
+        self.bits = info.bits
+        self.max = int(info.max)
+        self.min = int(info.min)
+        self.dtype = dtype_

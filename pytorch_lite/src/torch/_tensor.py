@@ -269,6 +269,9 @@ class Tensor:
         self._data[md] = value
         return self
 
+    def is_contiguous(self):
+        return self._data.flags["C_CONTIGUOUS"]
+
     def contiguous(self):
         if self._data.flags["C_CONTIGUOUS"]:
             if self._requires_grad:
@@ -299,6 +302,9 @@ class Tensor:
             t = _wrap(self._data.astype(nd, copy=False), logical)
             t._requires_grad = self._requires_grad
             return t
+        return self
+
+    def cpu(self):
         return self
 
     def float(self):
