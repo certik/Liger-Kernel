@@ -61,18 +61,26 @@ def load(pointer, mask=None, other=0, eviction_policy="", cache_modifier="", vol
     if isinstance(pointer, PointerBlock):
         offsets = pointer.offsets
         if isinstance(offsets, torch.Tensor):
-            offsets = offsets.long()
+            orig_shape = offsets.shape
+            flat_offsets = offsets.reshape(-1).long()
+        else:
+            orig_shape = None
+            flat_offsets = offsets
 
         if mask is not None and isinstance(mask, torch.Tensor):
-            # Only load from valid (masked) indices to avoid out-of-bounds
-            result = torch.full((offsets.shape[0],), other,
+            flat_mask = mask.broadcast_to(orig_shape).reshape(-1).bool() if orig_shape else mask.bool()
+            result = torch.full(flat_offsets.shape, other,
                                 dtype=pointer.data.dtype, device=pointer.data.device)
-            valid = mask.bool()
-            if valid.any():
-                result[valid] = pointer.data[offsets[valid]]
+            if flat_mask.any():
+                result[flat_mask] = pointer.data[flat_offsets[flat_mask]]
+            if orig_shape is not None:
+                result = result.reshape(orig_shape)
             return result
         else:
-            return pointer.data[offsets]
+            result = pointer.data[flat_offsets]
+            if orig_shape is not None:
+                result = result.reshape(orig_shape)
+            return result
     elif isinstance(pointer, TensorPointer):
         # Scalar load
         return pointer.data[pointer.offset]
@@ -85,7 +93,11 @@ def store(pointer, value, mask=None, eviction_policy=""):
     if isinstance(pointer, PointerBlock):
         offsets = pointer.offsets
         if isinstance(offsets, torch.Tensor):
-            offsets = offsets.long()
+            orig_shape = offsets.shape
+            flat_offsets = offsets.reshape(-1).long()
+        else:
+            orig_shape = None
+            flat_offsets = offsets
 
         # Cast value to match destination dtype (Triton does this implicitly)
         if isinstance(value, torch.Tensor) and value.dtype != pointer.data.dtype:
@@ -93,17 +105,19 @@ def store(pointer, value, mask=None, eviction_policy=""):
 
         if mask is not None:
             if isinstance(mask, torch.Tensor):
-                valid = mask.bool()
-                if valid.any():
-                    if isinstance(value, torch.Tensor):
-                        pointer.data[offsets[valid]] = value[valid]
+                flat_mask = mask.broadcast_to(orig_shape).reshape(-1).bool() if orig_shape else mask.bool()
+                if flat_mask.any():
+                    flat_value = value.reshape(-1) if isinstance(value, torch.Tensor) and value.ndim > 1 else value
+                    if isinstance(flat_value, torch.Tensor):
+                        pointer.data[flat_offsets[flat_mask]] = flat_value[flat_mask]
                     else:
-                        pointer.data[offsets[valid]] = value
+                        pointer.data[flat_offsets[flat_mask]] = flat_value
             else:
                 if mask:
-                    pointer.data[offsets] = value
+                    pointer.data[flat_offsets] = value.reshape(-1) if isinstance(value, torch.Tensor) and value.ndim > 1 else value
         else:
-            pointer.data[offsets] = value if isinstance(value, torch.Tensor) else torch.tensor(value)
+            flat_value = value.reshape(-1) if isinstance(value, torch.Tensor) and value.ndim > 1 else value
+            pointer.data[flat_offsets] = flat_value if isinstance(flat_value, torch.Tensor) else torch.tensor(flat_value)
     elif isinstance(pointer, TensorPointer):
         if isinstance(value, torch.Tensor) and value.dtype != pointer.data.dtype:
             value = value.to(pointer.data.dtype)
@@ -224,3 +238,58 @@ def atomic_max(pointer, value, mask=None):
 # cdiv at the language level too (some kernels use tl.cdiv)
 def cdiv(a, b):
     return (a + b - 1) // b
+
+
+def static_range(start, end=None, step=1):
+    """Equivalent to range() — in real Triton this unrolls at compile time."""
+    if end is None:
+        return range(start)
+    return range(start, end, step)
+
+
+def split(tensor):
+    """Split a 2D tensor along the last dimension, returning individual columns.
+
+    In Triton, tl.split on a (N, K) block returns K tensors of shape (N,).
+    """
+    if tensor.ndim == 2:
+        return tuple(tensor[:, i] for i in range(tensor.shape[1]))
+    raise ValueError(f"tl.split expects a 2D tensor, got shape {tensor.shape}")
+
+
+def join(a, b):
+    """Join two 1D tensors into a 2D tensor (inverse of split)."""
+    return torch.stack([a, b], dim=-1)
+
+
+# ─── tl.math submodule ───
+class _MathModule:
+    """Provides tl.math.* functions."""
+
+    @staticmethod
+    def fma(a, b, c):
+        """Fused multiply-add: a * b + c."""
+        return a * b + c
+
+    @staticmethod
+    def tanh(x):
+        return torch.tanh(x) if isinstance(x, torch.Tensor) else torch.tanh(torch.tensor(x)).item()
+
+    @staticmethod
+    def rsqrt(x):
+        return torch.rsqrt(x) if isinstance(x, torch.Tensor) else torch.rsqrt(torch.tensor(x, dtype=torch.float32)).item()
+
+    @staticmethod
+    def exp(x):
+        return torch.exp(x) if isinstance(x, torch.Tensor) else torch.exp(torch.tensor(x, dtype=torch.float32)).item()
+
+    @staticmethod
+    def log(x):
+        return torch.log(x) if isinstance(x, torch.Tensor) else torch.log(torch.tensor(x, dtype=torch.float32)).item()
+
+    @staticmethod
+    def sqrt(x):
+        return torch.sqrt(x) if isinstance(x, torch.Tensor) else torch.sqrt(torch.tensor(x, dtype=torch.float32)).item()
+
+
+math = _MathModule()

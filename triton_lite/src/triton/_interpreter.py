@@ -64,7 +64,23 @@ class PointerBlock:
 
     def __init__(self, data, offsets):
         self.data = data  # 1-D torch tensor
-        self.offsets = offsets  # 1-D torch tensor of integer offsets
+        self.offsets = offsets  # torch tensor of integer offsets (any shape)
+
+    def __add__(self, other):
+        if isinstance(other, (int, float)):
+            return PointerBlock(self.data, self.offsets + int(other))
+        if isinstance(other, torch.Tensor):
+            return PointerBlock(self.data, self.offsets + other)
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __mul__(self, other):
+        # Needed for things like pointer_block * 2 (offset scaling)
+        if isinstance(other, (int, float)):
+            return PointerBlock(self.data, self.offsets * int(other))
+        return NotImplemented
 
 
 class JITFunction:
