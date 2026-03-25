@@ -47,6 +47,7 @@ class Module:
     def __init__(self):
         self._modules = {}
         self._parameters = {}
+        self.training = True
 
     def __setattr__(self, name, value):
         if isinstance(value, Parameter):
@@ -122,6 +123,9 @@ class Module:
         return sd
 
     def train(self, mode=True):
+        self.training = mode
+        for m in self._modules.values():
+            m.train(mode)
         return self
 
     def eval(self):
@@ -290,6 +294,78 @@ class DataParallel(Module):
 
     def forward(self, *args, **kwargs):
         return self.module(*args, **kwargs)
+
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True,
+                 track_running_stats=True, dtype=None, device=None):
+        super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        nd = _to_np(dtype) or np.float32
+        logical = dtype if dtype is bfloat16 else None
+        if affine:
+            self.weight = Parameter(_wrap(np.ones(num_features, dtype=nd), logical))
+            self.bias = Parameter(_wrap(np.zeros(num_features, dtype=nd), logical))
+        else:
+            self.weight = None
+            self.bias = None
+        if track_running_stats:
+            self.running_mean = _wrap(np.zeros(num_features, dtype=nd), logical)
+            self.running_var = _wrap(np.ones(num_features, dtype=nd), logical)
+            self.num_batches_tracked = _wrap(np.array(0, dtype=np.int64))
+        else:
+            self.running_mean = None
+            self.running_var = None
+            self.num_batches_tracked = None
+
+    def forward(self, input):
+        if self.training:
+            data = input._data.astype(np.float32)
+            if data.ndim == 2:
+                axes = (0,)
+            else:
+                axes = tuple([0] + list(range(2, data.ndim)))
+            mean = np.mean(data, axis=axes, keepdims=True)
+            var = np.var(data, axis=axes, keepdims=True)
+            out = (data - mean) / np.sqrt(var + self.eps)
+            if self.track_running_stats:
+                n = data.size / data.shape[1]
+                mean_sq = mean.squeeze()
+                var_sq = var.squeeze()
+                self.running_mean._data = ((1 - self.momentum) * self.running_mean._data +
+                                           self.momentum * mean_sq.astype(self.running_mean._data.dtype))
+                self.running_var._data = ((1 - self.momentum) * self.running_var._data +
+                                          self.momentum * var_sq.astype(self.running_var._data.dtype) * n / (n - 1))
+        else:
+            data = input._data.astype(np.float32)
+            rm = self.running_mean._data.astype(np.float32)
+            rv = self.running_var._data.astype(np.float32)
+            if data.ndim == 2:
+                rm = rm[np.newaxis, :]
+                rv = rv[np.newaxis, :]
+            else:
+                shape = [1] * data.ndim
+                shape[1] = self.num_features
+                rm = rm.reshape(shape)
+                rv = rv.reshape(shape)
+            out = (data - rm) / np.sqrt(rv + self.eps)
+        if self.weight is not None:
+            w_shape = [1] * out.ndim
+            w_shape[1] = self.num_features
+            out = out * self.weight._data.astype(np.float32).reshape(w_shape)
+        if self.bias is not None:
+            b_shape = [1] * out.ndim
+            b_shape[1] = self.num_features
+            out = out + self.bias._data.astype(np.float32).reshape(b_shape)
+        return _wrap(out.astype(input._data.dtype), input._logical_dtype)
+
+
+class BatchNorm2d(BatchNorm1d):
+    pass
 
 
 # ─── torch.nn.init stubs ────────────────────────────────────────────────────

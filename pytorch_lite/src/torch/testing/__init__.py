@@ -10,6 +10,13 @@ def assert_close(actual, expected, rtol=None, atol=None, **kwargs):
     a = actual._data if isinstance(actual, Tensor) else np.asarray(actual)
     b = expected._data if isinstance(expected, Tensor) else np.asarray(expected)
 
+    # Handle shape mismatch
+    if a.shape != b.shape:
+        raise AssertionError(
+            f"Tensor-likes are not close!\n"
+            f"Shape mismatch: {a.shape} vs {b.shape}"
+        )
+
     # Promote both to the higher-precision type for comparison
     common = np.result_type(a.dtype, b.dtype)
     a = a.astype(common)
@@ -27,4 +34,7 @@ def assert_close(actual, expected, rtol=None, atol=None, **kwargs):
             rtol = rtol or 1.3e-6
             atol = atol or 1e-5
 
-    np.testing.assert_allclose(a, b, rtol=rtol, atol=atol)
+    try:
+        np.testing.assert_allclose(a, b, rtol=rtol, atol=atol)
+    except AssertionError as e:
+        raise AssertionError(f"Tensor-likes are not close!\n{e}") from None
